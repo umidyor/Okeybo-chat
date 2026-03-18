@@ -17,11 +17,10 @@ from support_chat.websocket import chat_ws
 
 
 async def application(scope, receive, send):
-
     if scope["type"] == "websocket":
         path = scope.get("path", "")
-
         if path.startswith("/ws/chat/"):
             await chat_ws(scope, receive, send)
             return
+
     await django_app(scope, receive, send)

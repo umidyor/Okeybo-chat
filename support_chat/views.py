@@ -3,32 +3,26 @@ from django.http import JsonResponse
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from .models import Conversation
-
-
-
-import json
-from django.http import JsonResponse
-from django.views import View
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
 from .models import Conversation,Message
+
+from django.shortcuts import render
 
 
 @method_decorator(csrf_exempt, name="dispatch")
 class StartChatView(View):
 
     def post(self, request):
-
         data = json.loads(request.body or "{}")
 
         client_id = data.get("client_id")
         operator_id = data.get("operator_id")
+        bot_enabled = data.get("bot_enabled", False)
 
-        if not client_id or not operator_id:
-            return JsonResponse({
-                "error": "client_id and operator_id are required"
-            }, status=400)
+        if not client_id:
+            return JsonResponse({"error": "client_id is required"}, status=400)
+
+        if not bot_enabled and not operator_id:
+            return JsonResponse({"error": "operator_id is required"}, status=400)
 
         conversation = Conversation.objects.filter(
             client_id=client_id,
@@ -39,7 +33,8 @@ class StartChatView(View):
         if not conversation:
             conversation = Conversation.objects.create(
                 client_id=client_id,
-                operator_id=operator_id
+                operator_id=operator_id,
+                bot_enabled=bot_enabled
             )
 
         return JsonResponse({
@@ -57,7 +52,7 @@ ALLOWED_TYPES = {
     "application/msword": "file",
 }
 
-
+MAX_FILE_SIZE = 50 * 1024 * 1024
 @method_decorator(csrf_exempt, name="dispatch")
 class UploadMediaView(View):
 
@@ -74,7 +69,8 @@ class UploadMediaView(View):
 
         if not file:
             return JsonResponse({"error": "file required"}, status=400)
-
+        if file.size > MAX_FILE_SIZE:
+            return JsonResponse({"error": "file size exceeds 50MB limit"}, status=400)
         file_type = file.content_type
 
         if file_type not in ALLOWED_TYPES:
@@ -175,3 +171,51 @@ class ChatHistoryView(View):
             "offset": offset,
             "messages": data
         })
+
+
+
+def chat_demo_client(request, client_id):
+    return render(request, "chat.html", {
+        "user_id": client_id,
+        "user_type": "client"
+    })
+
+def chat_demo_operator(request, operator_id):
+    return render(request, "chat.html", {
+        "user_id": operator_id,
+        "user_type": "operator"
+    })
+
+
+class ConversationListView(View):
+    def get(self, request):
+        user_id = request.GET.get("user_id")
+        user_type = request.GET.get("user_type")
+
+        if not user_id or not user_type:
+            return JsonResponse({"error": "user_id and user_type required"}, status=400)
+
+        if user_type == "client":
+            conversations = Conversation.objects.filter(
+                client_id=user_id
+            ).order_by("-created_at").values("id", "uuid", "client_id", "operator_id", "bot_enabled", "status", "created_at")
+        elif user_type == "operator":
+            conversations = Conversation.objects.filter(
+                operator_id=user_id
+            ).order_by("-created_at").values("id", "uuid", "client_id", "operator_id", "bot_enabled", "status", "created_at")
+        else:
+            return JsonResponse({"error": "invalid user_type"}, status=400)
+
+        data = []
+        for c in conversations:
+            data.append({
+                "id": c["id"],
+                "uuid": str(c["uuid"]),
+                "client_id": c["client_id"],
+                "operator_id": c["operator_id"],
+                "bot_enabled": c["bot_enabled"],
+                "status": c["status"],
+                "created_at": c["created_at"].isoformat()
+            })
+
+        return JsonResponse({"conversations": data})

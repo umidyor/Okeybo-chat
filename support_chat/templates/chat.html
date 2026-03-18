@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Demo</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background: #f0f2f5; height: 100vh; display: flex; overflow: hidden; }
+
+        #sidebar { width: 300px; background: white; border-right: 1px solid #e5e7eb; display: flex; flex-direction: column; }
+        #sidebar-header { padding: 16px; background: #4f46e5; color: white; }
+        #sidebar-header h3 { font-size: 15px; }
+        #sidebar-header p { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+        #conv-list { flex: 1; overflow-y: auto; }
+        .conv-item { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.15s; }
+        .conv-item:hover { background: #f9fafb; }
+        .conv-item.active { background: #ede9fe; border-left: 3px solid #4f46e5; }
+        .conv-item .conv-title { font-size: 14px; font-weight: 500; color: #111; }
+        .conv-item .conv-sub { font-size: 12px; color: #888; margin-top: 3px; }
+        .conv-item .conv-badge { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-top: 4px; }
+        .badge-bot { background: #e0f2fe; color: #0369a1; }
+        .badge-operator { background: #f0fdf4; color: #16a34a; }
+
+        #chat-area { flex: 1; display: flex; flex-direction: column; }
+        #chat-placeholder { flex: 1; display: flex; align-items: center; justify-content: center; color: #aaa; font-size: 14px; }
+        #chat-box { display: none; flex-direction: column; height: 100%; }
+        #chat-header { padding: 14px 20px; background: white; border-bottom: 1px solid #e5e7eb; }
+        #chat-header .ch-title { font-size: 15px; font-weight: 600; color: #111; }
+        #chat-header .ch-sub { font-size: 12px; color: #888; margin-top: 2px; }
+
+        #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; background: #f8fafc; }
+        .msg { max-width: 70%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; word-break: break-word; }
+        .msg.me { align-self: flex-end; background: #4f46e5; color: white; border-bottom-right-radius: 4px; }
+        .msg.other { align-self: flex-start; background: white; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .msg.bot { align-self: flex-start; background: #e0f2fe; color: #0369a1; border-bottom-left-radius: 4px; }
+        .msg .meta { font-size: 11px; margin-top: 4px; opacity: 0.65; }
+        .typing-indicator { align-self: flex-start; font-size: 13px; color: #999; font-style: italic; padding: 6px 12px; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+
+        #chat-status { padding: 5px 16px; font-size: 12px; color: #999; background: white; border-top: 1px solid #f0f0f0; border-bottom: 1px solid #f0f0f0; }
+        #input-area { padding: 12px 16px; background: white; display: flex; gap: 8px; }
+        #input-area input { flex: 1; padding: 10px 16px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; outline: none; }
+        #input-area input:focus { border-color: #4f46e5; }
+        #input-area button { padding: 10px 20px; background: #4f46e5; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 14px; }
+        #input-area button:hover { background: #4338ca; }
+        #input-area button:disabled { background: #c7d2fe; cursor: not-allowed; }
+
+        .load-more { text-align: center; padding: 8px; }
+        .load-more button { font-size: 12px; color: #4f46e5; background: none; border: 1px solid #4f46e5; border-radius: 8px; padding: 4px 12px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div id="sidebar-header">
+        <h3 id="sidebar-title"></h3>
+        <p id="sidebar-sub"></p>
+    </div>
+    <div id="conv-list">
+        <div id="no-conv">Yuklanmoqda...</div>
+    </div>
+</div>
+
+<div id="chat-area">
+    <div id="chat-placeholder">Conversationni tanlang</div>
+    <div id="chat-box">
+        <div id="chat-header">
+            <div class="ch-title" id="ch-title"></div>
+            <div class="ch-sub" id="ch-sub"></div>
+        </div>
+        <div id="messages"></div>
+        <div id="chat-status"></div>
+        <div id="input-area">
+            <input type="text" id="msg-input" placeholder="Xabar yozing..." onkeydown="if(event.key==='Enter') sendMsg()" />
+            <button id="send-btn" onclick="sendMsg()" disabled>Yuborish</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const USER_ID = {{ user_id }};
+    const USER_TYPE = "{{ user_type }}";
+
+    let ws = null;
+    let activeConv = null;
+    let typingEl = null;
+    let offset = 0;
+    const LIMIT = 50;
+
+    document.getElementById("sidebar-title").textContent =
+        USER_TYPE === "client" ? `Client #${USER_ID}` : `Operator #${USER_ID}`;
+    document.getElementById("sidebar-sub").textContent =
+        USER_TYPE === "client" ? "Mening suhbatlarim" : "Mijozlar suhbatlari";
+
+    async function loadConversations() {
+        try {
+            const res = await fetch(`/api/chat/conversations/?user_id=${USER_ID}&user_type=${USER_TYPE}`);
+            const data = await res.json();
+            const list = document.getElementById("conv-list");
+            list.innerHTML = "";
+
+            if (!data.conversations || data.conversations.length === 0) {
+                list.innerHTML = '<div id="no-conv">Suhbat topilmadi</div>';
+                return;
+            }
+
+            data.conversations.forEach(conv => {
+                const div = document.createElement("div");
+                div.className = "conv-item";
+                div.dataset.uuid = conv.uuid;
+
+                const with_who = USER_TYPE === "client"
+                    ? (conv.bot_enabled ? "Bot" : `Operator #${conv.operator_id}`)
+                    : `Client #${conv.client_id}`;
+
+                const badge = conv.bot_enabled
+                    ? `<span class="conv-badge badge-bot">Bot</span>`
+                    : `<span class="conv-badge badge-operator">Operator</span>`;
+
+                const date = new Date(conv.created_at).toLocaleDateString("uz");
+
+                div.innerHTML = `
+                    <div class="conv-title">${with_who}</div>
+                    <div class="conv-sub">${date} · ${conv.status}</div>
+                    ${badge}
+                `;
+
+                div.onclick = () => openConversation(conv, div);
+                list.appendChild(div);
+            });
+        } catch(e) {
+            document.getElementById("no-conv").textContent = "Yuklashda xato";
+        }
+    }
+
+    async function openConversation(conv, el) {
+        document.querySelectorAll(".conv-item").forEach(i => i.classList.remove("active"));
+        el.classList.add("active");
+
+        activeConv = conv;
+        offset = 0;
+
+        document.getElementById("chat-placeholder").style.display = "none";
+        document.getElementById("chat-box").style.display = "flex";
+
+        const with_who = USER_TYPE === "client"
+            ? (conv.bot_enabled ? "Bot" : `Operator #${conv.operator_id}`)
+            : `Client #${conv.client_id}`;
+
+        document.getElementById("ch-title").textContent = with_who;
+        document.getElementById("ch-sub").textContent = `UUID: ${conv.uuid.slice(0, 8)}...  |  Status: ${conv.status}`;
+        document.getElementById("messages").innerHTML = "";
+        document.getElementById("chat-status").textContent = "Ulanmoqda...";
+        document.getElementById("send-btn").disabled = true;
+
+        if (ws) {
+            ws.onclose = null;
+            ws.close();
+            ws = null;
+        }
+
+        await loadHistory(conv.uuid, true);
+        connectWS(conv.uuid);
+    }
+
+    async function loadHistory(uuid, reset = false) {
+        if (reset) offset = 0;
+
+        try {
+            const res = await fetch(`/api/chat/history/?conversation_uuid=${uuid}&limit=${LIMIT}&offset=${offset}`);
+            const data = await res.json();
+            if (!data.messages) return;
+
+            const messages = document.getElementById("messages");
+            const existingLoadMore = document.getElementById("load-more-btn");
+            if (existingLoadMore) existingLoadMore.remove();
+
+            const reversed = [...data.messages].reverse();
+
+            if (reset) messages.innerHTML = "";
+
+            if (data.messages.length === LIMIT) {
+                const loadMoreDiv = document.createElement("div");
+                loadMoreDiv.className = "load-more";
+                loadMoreDiv.id = "load-more-btn";
+                loadMoreDiv.innerHTML = `<button onclick="loadMoreHistory()">Oldingi xabarlar</button>`;
+                messages.prepend(loadMoreDiv);
+            }
+
+            const fragment = document.createDocumentFragment();
+            reversed.forEach(m => {
+                const el = buildMsgEl(m.text, getMsgClass(m.sender_id, m.sender_type), m.sender_type, m.created_at);
+                fragment.appendChild(el);
+            });
+
+            if (reset) {
+                messages.appendChild(fragment);
+                messages.scrollTop = messages.scrollHeight;
+            } else {
+                const firstChild = messages.querySelector(".msg");
+                messages.insertBefore(fragment, firstChild);
+            }
+
+            offset += data.messages.length;
+        } catch(e) {
+            console.error("history error:", e);
+        }
+    }
+
+    async function loadMoreHistory() {
+        if (!activeConv) return;
+        await loadHistory(activeConv.uuid, false);
+    }
+
+    function getMsgClass(sender_id, sender_type) {
+        if (sender_type === "bot") return "bot";
+        if (parseInt(sender_id) === USER_ID) return "me";
+        return "other";
+    }
+
+    function buildMsgEl(text, cls, senderType, createdAt) {
+        const div = document.createElement("div");
+        div.className = `msg ${cls}`;
+        const time = createdAt
+            ? new Date(createdAt).toLocaleTimeString("uz", { hour: "2-digit", minute: "2-digit" })
+            : "";
+        div.innerHTML = `${text || ""}<div class="meta">${senderType} · ${time}</div>`;
+        return div;
+    }
+
+    function connectWS(uuid) {
+        ws = new WebSocket(`ws://127.0.0.1:8000/ws/chat/${uuid}/`);
+
+        ws.onopen = () => {
+            document.getElementById("chat-status").textContent = "Ulandi ✓";
+            document.getElementById("send-btn").disabled = false;
+            console.log("[WS] connected");
+        };
+
+        ws.onmessage = (event) => {
+            console.log("[WS] received:", event.data);
+            let data;
+            try {
+                data = JSON.parse(event.data);
+            } catch(e) {
+                console.error("[WS] parse error:", e);
+                return;
+            }
+
+            if (data.type === "connected") return;
+
+            if (data.type === "typing") {
+                showTyping();
+                return;
+            }
+
+            if (data.type === "error") {
+                console.warn("[WS] error:", data);
+                document.getElementById("chat-status").textContent = `Xato: ${data.error} (${data.code})`;
+                return;
+            }
+
+            if (data.type === "message") {
+                removeTyping();
+                // o'zining xabarini skip — allaqachon ekranda
+                if (parseInt(data.sender_id) === USER_ID && data.sender_type !== "bot") return;
+                const cls = getMsgClass(data.sender_id, data.sender_type);
+                const el = buildMsgEl(data.text, cls, data.sender_type, data.created_at);
+                const messages = document.getElementById("messages");
+                messages.appendChild(el);
+                messages.scrollTop = messages.scrollHeight;
+            }
+        };
+
+        ws.onclose = (e) => {
+            console.log("[WS] closed:", e.code, e.reason);
+            document.getElementById("chat-status").textContent = "Ulanish uzildi";
+            document.getElementById("send-btn").disabled = true;
+        };
+
+        ws.onerror = (e) => {
+            console.error("[WS] error:", e);
+            document.getElementById("chat-status").textContent = "Xato yuz berdi";
+        };
+    }
+
+    function sendMsg() {
+        const input = document.getElementById("msg-input");
+        const text = input.value.trim();
+        if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+        // darhol ekranga qo'sh
+        const el = buildMsgEl(text, "me", USER_TYPE, new Date().toISOString());
+        const messages = document.getElementById("messages");
+        messages.appendChild(el);
+        messages.scrollTop = messages.scrollHeight;
+
+        ws.send(JSON.stringify({
+            type: "message",
+            sender_type: USER_TYPE,
+            sender_id: USER_ID,
+            text: text
+        }));
+
+        input.value = "";
+    }
+
+    function showTyping() {
+        removeTyping();
+        const messages = document.getElementById("messages");
+        typingEl = document.createElement("div");
+        typingEl.className = "typing-indicator";
+        typingEl.textContent = "Bot yozmoqda...";
+        messages.appendChild(typingEl);
+        messages.scrollTop = messages.scrollHeight;
+    }
+
+    function removeTyping() {
+        if (typingEl) { typingEl.remove(); typingEl = null; }
+    }
+
+    loadConversations();
+</script>
+</body>
+</html>

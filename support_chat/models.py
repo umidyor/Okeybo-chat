@@ -7,7 +7,8 @@ class Conversation(models.Model):
 
     client_id = models.BigIntegerField()
     operator_id = models.BigIntegerField(null=True, blank=True)
-
+    bot_enabled = models.BooleanField(default=False)
+    ai_summary = models.TextField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
         default="open"
@@ -88,3 +89,15 @@ class Message(models.Model):
         indexes = [
             models.Index(fields=["conversation", "created_at"]),
         ]
+
+
+class BotConfig(models.Model):
+    system_prompt = models.TextField()
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Bot Config"
+
+    def __str__(self):
+        return f"BotConfig (updated: {self.updated_at})"
